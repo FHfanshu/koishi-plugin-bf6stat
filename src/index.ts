@@ -130,12 +130,15 @@ async function fetchStats(ctx: Context, player: string, platform: string, langua
     }
 
     return data
-  } catch (err: any) {
-    if (err?.response?.data?.errors?.length) {
-      throw new Error(err.response.data.errors[0])
-    }
-    if (err?.response?.status === 404) {
-      throw new Error('未找到该玩家的战绩。')
+  } catch (err: unknown) {
+    if (err && typeof err === 'object' && 'response' in err) {
+      const responseErr = err as any
+      if (responseErr?.response?.data?.errors?.length) {
+        throw new Error(responseErr.response.data.errors[0])
+      }
+      if (responseErr?.response?.status === 404) {
+        throw new Error('未找到该玩家的战绩。')
+      }
     }
     throw new Error('请求统计数据时出错。')
   }
