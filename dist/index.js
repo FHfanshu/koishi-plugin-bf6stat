@@ -25,12 +25,25 @@ exports.name = 'bf6-stats';
 exports.Config = koishi_1.Schema.object({
     defaultPlatform: koishi_1.Schema.union(['pc', 'ps', 'xbox']).default('pc').description('默认查询平台'),
     language: koishi_1.Schema.string().default('zh-CN').description('接口语言代码 (lang)'),
-    accentColor: koishi_1.Schema.string().default('#2563eb').description('战绩卡片强调色'),
-    cardWidth: koishi_1.Schema.number().default(1024).description('战绩卡片宽度'),
-    cardHeight: koishi_1.Schema.number().default(640).description('战绩卡片高度'),
+    accentColor: koishi_1.Schema.string().default('#2563eb').description('战绩卡片强调色 (十六进制颜色值)'),
+    cardWidth: koishi_1.Schema.number().min(200).max(1200).default(800).description('战绩卡片宽度 (200-1200px)'),
+    cardHeight: koishi_1.Schema.number().min(150).max(800).default(500).description('战绩卡片高度 (150-800px)'),
+    primaryMetricColumns: koishi_1.Schema.number().min(1).max(8).default(6).description('主要指标网格列数 (1-8)'),
+    secondaryMetricColumns: koishi_1.Schema.number().min(1).max(6).default(3).description('次要指标网格列数 (1-6)'),
+    topWeaponsCount: koishi_1.Schema.number().min(0).max(10).default(3).description('显示的武器数量 (0-10, 0表示不显示)'),
+    enableCache: koishi_1.Schema.boolean().default(false).description('启用图片缓存 (实验性功能)'),
 });
 function apply(ctx, config) {
     const logger = new koishi_1.Logger('bf6-stats');
+    // Validate configuration
+    validateConfig(config, logger);
+    // Add process error handlers to prevent crashes
+    process.on('uncaughtException', (error) => {
+        logger.error('Uncaught exception:', error);
+    });
+    process.on('unhandledRejection', (reason, promise) => {
+        logger.error('Unhandled rejection at:', promise, 'reason:', reason);
+    });
     ctx.command('bf6 <player:text> [platform]', '查询 Battlefield 6 玩家战绩')
         .alias('battlefield6')
         .usage('示例：bf6 playerName 或 bf6 playerName xbox')
@@ -50,6 +63,9 @@ function apply(ctx, config) {
                 accentColor: config.accentColor,
                 width: config.cardWidth,
                 height: config.cardHeight,
+                primaryMetricColumns: config.primaryMetricColumns,
+                secondaryMetricColumns: config.secondaryMetricColumns,
+                topWeaponsCount: config.topWeaponsCount,
                 logger,
             });
             return koishi_1.h.image(buffer, 'image/png');
@@ -58,6 +74,27 @@ function apply(ctx, config) {
             logger.warn(error);
             return error.message || '查询失败，请稍后重试。';
         }
+    });
+}
+function validateConfig(config, logger) {
+    // Validate accent color format
+    if (!/^#([0-9A-Fa-f]{3}){1,2}$/.test(config.accentColor)) {
+        logger.warn(`Invalid accentColor: ${config.accentColor}, using default #2563eb`);
+        config.accentColor = '#2563eb';
+    }
+    // Validate language code format
+    if (!config.language || config.language.length < 2) {
+        logger.warn(`Invalid language: ${config.language}, using default zh-CN`);
+        config.language = 'zh-CN';
+    }
+    // Log configuration summary
+    logger.debug('Plugin configuration validated:', {
+        platform: config.defaultPlatform,
+        language: config.language,
+        cardSize: `${config.cardWidth}x${config.cardHeight}`,
+        primaryColumns: config.primaryMetricColumns,
+        secondaryColumns: config.secondaryMetricColumns,
+        topWeapons: config.topWeaponsCount,
     });
 }
 function resolvePlatform(input, fallback) {
@@ -75,6 +112,7 @@ async function fetchStats(ctx, player, platform, language) {
                 platform,
                 lang: language,
             },
+            timeout: 15000 // 15 second timeout
         });
         if (!data || data.hasResults === false) {
             throw new Error('未找到该玩家的战绩。');
@@ -99,35 +137,58 @@ async function fetchStats(ctx, player, platform, language) {
 }
 async function renderStatsCard(ctx, stats, options) {
     const { width, height } = options;
-    const canvas = (0, canvas_1.createCanvas)(width, height);
-    const c = canvas.getContext('2d');
-    drawCardBackground(c, width, height, options.accentColor);
-    const avatar = await loadRemoteImage(ctx, stats.avatar, options.logger);
-    const rankImg = await loadRemoteImage(ctx, stats.rankImg, options.logger);
-    const metricsStartY = drawHeaderSection(c, stats, options, avatar, rankImg);
-    const primaryMetrics = buildPrimaryMetrics(stats);
-    const primaryBottom = drawPrimaryMetricGrid(c, primaryMetrics, {
-        startX: 40,
-        startY: metricsStartY,
-        width,
-        accent: options.accentColor,
-    });
-    const secondaryMetrics = buildSecondaryMetrics(stats);
-    const secondaryBottom = drawSecondaryMetricGrid(c, secondaryMetrics, {
-        startX: 40,
-        startY: primaryBottom + 24,
-        width,
-        accent: options.accentColor,
-    });
-    await drawWeaponsSection(ctx, c, stats.weapons, {
-        startX: 40,
-        startY: secondaryBottom + 32,
-        width,
-        accent: options.accentColor,
-        logger: options.logger,
-    });
-    drawFooter(c, width, height);
-    return canvas.toBuffer('image/png');
+    // Validate dimensions to prevent memory issues
+    const safeWidth = Math.min(Math.max(width, 200), 1200);
+    const safeHeight = Math.min(Math.max(height, 150), 800);
+    let canvas;
+    let c;
+    try {
+        canvas = (0, canvas_1.createCanvas)(safeWidth, safeHeight);
+        c = canvas.getContext('2d');
+    }
+    catch (error) {
+        options.logger.error('Canvas creation failed:', error);
+        throw new Error('无法创建图片，请检查服务器内存');
+    }
+    try {
+        drawCardBackground(c, safeWidth, safeHeight, options.accentColor);
+        // Load images with timeout and error handling
+        const avatarPromise = loadRemoteImage(ctx, stats.avatar, options.logger);
+        const rankImgPromise = loadRemoteImage(ctx, stats.rankImg, options.logger);
+        const [avatar, rankImg] = await Promise.allSettled([avatarPromise, rankImgPromise])
+            .then(results => results.map(result => result.status === 'fulfilled' ? result.value : null));
+        const metricsStartY = drawHeaderSection(c, stats, options, avatar, rankImg);
+        const primaryMetrics = buildPrimaryMetrics(stats);
+        const primaryBottom = drawPrimaryMetricGrid(c, primaryMetrics, {
+            startX: 40,
+            startY: metricsStartY,
+            width: safeWidth,
+            accent: options.accentColor,
+            columns: options.primaryMetricColumns,
+        });
+        const secondaryMetrics = buildSecondaryMetrics(stats);
+        const secondaryBottom = drawSecondaryMetricGrid(c, secondaryMetrics, {
+            startX: 40,
+            startY: primaryBottom + 24,
+            width: safeWidth,
+            accent: options.accentColor,
+            columns: options.secondaryMetricColumns,
+        });
+        await drawWeaponsSection(ctx, c, stats.weapons, {
+            startX: 40,
+            startY: secondaryBottom + 32,
+            width: safeWidth,
+            accent: options.accentColor,
+            topCount: options.topWeaponsCount,
+            logger: options.logger,
+        });
+        drawFooter(c, safeWidth, safeHeight);
+        return canvas.toBuffer('image/png');
+    }
+    catch (error) {
+        options.logger.error('Canvas rendering failed:', error);
+        throw new Error('图片生成失败，请稍后重试');
+    }
 }
 function drawCardBackground(c, width, height, accentColor) {
     const baseGradient = c.createLinearGradient(0, 0, 0, height);
@@ -291,7 +352,7 @@ function buildSecondaryMetrics(stats) {
     ];
 }
 function drawPrimaryMetricGrid(c, metrics, layout) {
-    const columns = 6;
+    const columns = layout.columns;
     const contentWidth = layout.width - layout.startX * 2;
     const columnWidth = contentWidth / columns;
     const rowHeight = 122;
@@ -307,7 +368,7 @@ function drawPrimaryMetricGrid(c, metrics, layout) {
     return bottom;
 }
 function drawSecondaryMetricGrid(c, metrics, layout) {
-    const columns = 3;
+    const columns = layout.columns;
     const contentWidth = layout.width - layout.startX * 2;
     const columnWidth = contentWidth / columns;
     const rowHeight = 108;
@@ -348,8 +409,8 @@ function drawMetricPanel(c, x, y, width, height, metric, accentColor, emphasize 
 }
 async function drawWeaponsSection(ctx, c, weapons, layout) {
     const candidates = (weapons || []).slice().sort((a, b) => Number(b.kills || 0) - Number(a.kills || 0));
-    const topWeapons = candidates.slice(0, 3);
-    if (!topWeapons.length)
+    const topWeapons = candidates.slice(0, layout.topCount);
+    if (!topWeapons.length || layout.topCount === 0)
         return;
     const rowHeight = 128;
     const contentWidth = layout.width - layout.startX * 2;
@@ -538,14 +599,21 @@ async function loadRemoteImage(ctx, url, logger) {
     if (!url)
         return null;
     try {
-        const buffer = await ctx.http.get(url, { responseType: 'arraybuffer' });
+        // Add timeout and size limit for image loading
+        const buffer = await ctx.http.get(url, {
+            responseType: 'arraybuffer',
+            timeout: 10000 // 10 second timeout
+        });
         const data = node_buffer_1.Buffer.from(buffer);
-        if (!data.length)
+        // Validate image size (max 5MB)
+        if (!data.length || data.length > 5 * 1024 * 1024) {
+            logger.debug(`Image too large or empty: ${url}`);
             return null;
+        }
         return await (0, canvas_1.loadImage)(data);
     }
     catch (error) {
-        logger.debug(`加载图片失败: ${url}`);
+        logger.debug(`加载图片失败: ${url}`, error);
         return null;
     }
 }

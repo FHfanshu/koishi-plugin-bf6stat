@@ -1,6 +1,6 @@
 {
   "name": "koishi-plugin-bf6-player-stats",
-  "version": "0.0.2778",
+  "version": "0.0.3000",
   "description": "自用，查询 Battlefield 6 玩家战绩并返回战绩卡片图片",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -31,8 +31,7 @@
     "dist"
   ],
   "dependencies": {
-    "@napi-rs/canvas": "^0.1.43",
-    "dayjs": "^1.11.11"
+    "@napi-rs/canvas": "^0.1.43"
   },
   "peerDependencies": {
     "koishi": "^4.15.8"

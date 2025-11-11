@@ -24,9 +24,13 @@ npm run build
 | --- | --- | --- |
 | defaultPlatform | `pc` | 默认查询平台（pc / ps / xbox） |
 | language | `zh-CN` | 接口语言代码（传递给 Gametools API 的 `lang` 参数） |
-| accentColor | `#2563eb` | 战绩卡片强调色 |
-| cardWidth | `1024` | 战绩卡片宽度 |
-| cardHeight | `640` | 战绩卡片高度 |
+| accentColor | `#2563eb` | 战绩卡片强调色（十六进制颜色值） |
+| cardWidth | `800` | 战绩卡片宽度（200-1200px） |
+| cardHeight | `500` | 战绩卡片高度（150-800px） |
+| primaryMetricColumns | `6` | 主要指标网格列数（1-8） |
+| secondaryMetricColumns | `3` | 次要指标网格列数（1-6） |
+| topWeaponsCount | `3` | 显示的武器数量（0-10，0表示不显示） |
+| enableCache | `false` | 启用图片缓存（实验性功能） |
 
 ## 用法
 

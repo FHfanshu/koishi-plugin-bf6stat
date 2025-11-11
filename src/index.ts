@@ -28,18 +28,38 @@ export interface Config {
   accentColor: string
   cardWidth: number
   cardHeight: number
+  primaryMetricColumns: number
+  secondaryMetricColumns: number
+  topWeaponsCount: number
+  enableCache: boolean
 }
 
 export const Config: Schema<Config> = Schema.object({
   defaultPlatform: Schema.union(['pc', 'ps', 'xbox']).default('pc').description('默认查询平台'),
   language: Schema.string().default('zh-CN').description('接口语言代码 (lang)'),
-  accentColor: Schema.string().default('#2563eb').description('战绩卡片强调色'),
-  cardWidth: Schema.number().default(1024).description('战绩卡片宽度'),
-  cardHeight: Schema.number().default(640).description('战绩卡片高度'),
+  accentColor: Schema.string().default('#2563eb').description('战绩卡片强调色 (十六进制颜色值)'),
+  cardWidth: Schema.number().min(200).max(1200).default(800).description('战绩卡片宽度 (200-1200px)'),
+  cardHeight: Schema.number().min(150).max(800).default(500).description('战绩卡片高度 (150-800px)'),
+  primaryMetricColumns: Schema.number().min(1).max(8).default(6).description('主要指标网格列数 (1-8)'),
+  secondaryMetricColumns: Schema.number().min(1).max(6).default(3).description('次要指标网格列数 (1-6)'),
+  topWeaponsCount: Schema.number().min(0).max(10).default(3).description('显示的武器数量 (0-10, 0表示不显示)'),
+  enableCache: Schema.boolean().default(false).description('启用图片缓存 (实验性功能)'),
 })
 
 export function apply(ctx: Context, config: Config) {
   const logger = new Logger('bf6-stats')
+
+  // Validate configuration
+  validateConfig(config, logger)
+
+  // Add process error handlers to prevent crashes
+  process.on('uncaughtException', (error) => {
+    logger.error('Uncaught exception:', error)
+  })
+
+  process.on('unhandledRejection', (reason, promise) => {
+    logger.error('Unhandled rejection at:', promise, 'reason:', reason)
+  })
 
   ctx.command('bf6 <player:text> [platform]', '查询 Battlefield 6 玩家战绩')
     .alias('battlefield6')
@@ -62,6 +82,9 @@ export function apply(ctx: Context, config: Config) {
           accentColor: config.accentColor,
           width: config.cardWidth,
           height: config.cardHeight,
+          primaryMetricColumns: config.primaryMetricColumns,
+          secondaryMetricColumns: config.secondaryMetricColumns,
+          topWeaponsCount: config.topWeaponsCount,
           logger,
         })
         return h.image(buffer, 'image/png')
@@ -70,6 +93,30 @@ export function apply(ctx: Context, config: Config) {
         return (error as Error).message || '查询失败，请稍后重试。'
       }
     })
+}
+
+function validateConfig(config: Config, logger: Logger) {
+  // Validate accent color format
+  if (!/^#([0-9A-Fa-f]{3}){1,2}$/.test(config.accentColor)) {
+    logger.warn(`Invalid accentColor: ${config.accentColor}, using default #2563eb`)
+    config.accentColor = '#2563eb'
+  }
+
+  // Validate language code format
+  if (!config.language || config.language.length < 2) {
+    logger.warn(`Invalid language: ${config.language}, using default zh-CN`)
+    config.language = 'zh-CN'
+  }
+
+  // Log configuration summary
+  logger.debug('Plugin configuration validated:', {
+    platform: config.defaultPlatform,
+    language: config.language,
+    cardSize: `${config.cardWidth}x${config.cardHeight}`,
+    primaryColumns: config.primaryMetricColumns,
+    secondaryColumns: config.secondaryMetricColumns,
+    topWeapons: config.topWeaponsCount,
+  })
 }
 
 function resolvePlatform(input: string | undefined, fallback: Config['defaultPlatform']) {
@@ -135,6 +182,7 @@ async function fetchStats(ctx: Context, player: string, platform: string, langua
         platform,
         lang: language,
       },
+      timeout: 15000 // 15 second timeout
     })
 
     if (!data || data.hasResults === false) {
@@ -166,48 +214,78 @@ interface RenderOptions {
   accentColor: string
   width: number
   height: number
+  primaryMetricColumns: number
+  secondaryMetricColumns: number
+  topWeaponsCount: number
   logger: Logger
 }
 
 async function renderStatsCard(ctx: Context, stats: BattlefieldStats, options: RenderOptions) {
   const { width, height } = options
-  const canvas = createCanvas(width, height)
-  const c = canvas.getContext('2d')
 
-  drawCardBackground(c, width, height, options.accentColor)
+  // Validate dimensions to prevent memory issues
+  const safeWidth = Math.min(Math.max(width, 200), 1200)
+  const safeHeight = Math.min(Math.max(height, 150), 800)
 
-  const avatar = await loadRemoteImage(ctx, stats.avatar, options.logger)
-  const rankImg = await loadRemoteImage(ctx, stats.rankImg, options.logger)
+  let canvas: any
+  let c: any
 
-  const metricsStartY = drawHeaderSection(c, stats, options, avatar, rankImg)
+  try {
+    canvas = createCanvas(safeWidth, safeHeight)
+    c = canvas.getContext('2d')
+  } catch (error) {
+    options.logger.error('Canvas creation failed:', error)
+    throw new Error('无法创建图片，请检查服务器内存')
+  }
 
-  const primaryMetrics = buildPrimaryMetrics(stats)
-  const primaryBottom = drawPrimaryMetricGrid(c, primaryMetrics, {
-    startX: 40,
-    startY: metricsStartY,
-    width,
-    accent: options.accentColor,
-  })
+  try {
+    drawCardBackground(c, safeWidth, safeHeight, options.accentColor)
 
-  const secondaryMetrics = buildSecondaryMetrics(stats)
-  const secondaryBottom = drawSecondaryMetricGrid(c, secondaryMetrics, {
-    startX: 40,
-    startY: primaryBottom + 24,
-    width,
-    accent: options.accentColor,
-  })
+    // Load images with timeout and error handling
+    const avatarPromise = loadRemoteImage(ctx, stats.avatar, options.logger)
+    const rankImgPromise = loadRemoteImage(ctx, stats.rankImg, options.logger)
 
-  await drawWeaponsSection(ctx, c, stats.weapons, {
-    startX: 40,
-    startY: secondaryBottom + 32,
-    width,
-    accent: options.accentColor,
-    logger: options.logger,
-  })
+    const [avatar, rankImg] = await Promise.allSettled([avatarPromise, rankImgPromise])
+      .then(results => results.map(result =>
+        result.status === 'fulfilled' ? result.value : null
+      ))
 
-  drawFooter(c, width, height)
+    const metricsStartY = drawHeaderSection(c, stats, options, avatar, rankImg)
 
-  return canvas.toBuffer('image/png')
+    const primaryMetrics = buildPrimaryMetrics(stats)
+    const primaryBottom = drawPrimaryMetricGrid(c, primaryMetrics, {
+      startX: 40,
+      startY: metricsStartY,
+      width: safeWidth,
+      accent: options.accentColor,
+      columns: options.primaryMetricColumns,
+    })
+
+    const secondaryMetrics = buildSecondaryMetrics(stats)
+    const secondaryBottom = drawSecondaryMetricGrid(c, secondaryMetrics, {
+      startX: 40,
+      startY: primaryBottom + 24,
+      width: safeWidth,
+      accent: options.accentColor,
+      columns: options.secondaryMetricColumns,
+    })
+
+    await drawWeaponsSection(ctx, c, stats.weapons, {
+      startX: 40,
+      startY: secondaryBottom + 32,
+      width: safeWidth,
+      accent: options.accentColor,
+      topCount: options.topWeaponsCount,
+      logger: options.logger,
+    })
+
+    drawFooter(c, safeWidth, safeHeight)
+
+    return canvas.toBuffer('image/png')
+  } catch (error) {
+    options.logger.error('Canvas rendering failed:', error)
+    throw new Error('图片生成失败，请稍后重试')
+  }
 }
 
 interface MetricBlock {
@@ -222,6 +300,7 @@ interface MetricGridLayout {
   startY: number
   width: number
   accent: string
+  columns: number
 }
 
 interface WeaponSectionLayout {
@@ -229,6 +308,7 @@ interface WeaponSectionLayout {
   startY: number
   width: number
   accent: string
+  topCount: number
   logger: Logger
 }
 
@@ -408,7 +488,7 @@ function buildSecondaryMetrics(stats: BattlefieldStats): MetricBlock[] {
 }
 
 function drawPrimaryMetricGrid(c: CanvasRenderingContext2D, metrics: MetricBlock[], layout: MetricGridLayout) {
-  const columns = 6
+  const columns = layout.columns
   const contentWidth = layout.width - layout.startX * 2
   const columnWidth = contentWidth / columns
   const rowHeight = 122
@@ -426,7 +506,7 @@ function drawPrimaryMetricGrid(c: CanvasRenderingContext2D, metrics: MetricBlock
 }
 
 function drawSecondaryMetricGrid(c: CanvasRenderingContext2D, metrics: MetricBlock[], layout: MetricGridLayout) {
-  const columns = 3
+  const columns = layout.columns
   const contentWidth = layout.width - layout.startX * 2
   const columnWidth = contentWidth / columns
   const rowHeight = 108
@@ -474,8 +554,8 @@ function drawMetricPanel(c: CanvasRenderingContext2D, x: number, y: number, widt
 
 async function drawWeaponsSection(ctx: Context, c: CanvasRenderingContext2D, weapons: BattlefieldWeapon[] | undefined, layout: WeaponSectionLayout) {
   const candidates = (weapons || []).slice().sort((a, b) => Number(b.kills || 0) - Number(a.kills || 0))
-  const topWeapons = candidates.slice(0, 3)
-  if (!topWeapons.length) return
+  const topWeapons = candidates.slice(0, layout.topCount)
+  if (!topWeapons.length || layout.topCount === 0) return
 
   const rowHeight = 128
   const contentWidth = layout.width - layout.startX * 2
@@ -672,12 +752,22 @@ function hexToRgba(hex: string, alpha = 1) {
 async function loadRemoteImage(ctx: Context, url: string | undefined, logger: Logger) {
   if (!url) return null
   try {
-    const buffer = await ctx.http.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
+    // Add timeout and size limit for image loading
+    const buffer = await ctx.http.get<ArrayBuffer>(url, {
+      responseType: 'arraybuffer',
+      timeout: 10000 // 10 second timeout
+    })
     const data = Buffer.from(buffer)
-    if (!data.length) return null
+
+    // Validate image size (max 5MB)
+    if (!data.length || data.length > 5 * 1024 * 1024) {
+      logger.debug(`Image too large or empty: ${url}`)
+      return null
+    }
+
     return await loadImage(data)
   } catch (error) {
-    logger.debug(`加载图片失败: ${url}`)
+    logger.debug(`加载图片失败: ${url}`, error)
     return null
   }
 }
