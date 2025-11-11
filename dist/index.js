@@ -26,8 +26,8 @@ exports.Config = koishi_1.Schema.object({
     defaultPlatform: koishi_1.Schema.union(['pc', 'ps', 'xbox']).default('pc').description('默认查询平台'),
     language: koishi_1.Schema.string().default('zh-CN').description('接口语言代码 (lang)'),
     accentColor: koishi_1.Schema.string().default('#2563eb').description('战绩卡片强调色'),
-    cardWidth: koishi_1.Schema.number().default(940).description('战绩卡片宽度'),
-    cardHeight: koishi_1.Schema.number().default(520).description('战绩卡片高度'),
+    cardWidth: koishi_1.Schema.number().default(1024).description('战绩卡片宽度'),
+    cardHeight: koishi_1.Schema.number().default(640).description('战绩卡片高度'),
 });
 function apply(ctx, config) {
     const logger = new koishi_1.Logger('bf6-stats');
@@ -101,94 +101,317 @@ async function renderStatsCard(ctx, stats, options) {
     const { width, height } = options;
     const canvas = (0, canvas_1.createCanvas)(width, height);
     const c = canvas.getContext('2d');
-    const gradient = c.createLinearGradient(0, 0, 0, height);
-    gradient.addColorStop(0, '#0f172a');
-    gradient.addColorStop(1, '#020617');
-    c.fillStyle = gradient;
+    drawCardBackground(c, width, height, options.accentColor);
+    const avatar = await loadRemoteImage(ctx, stats.avatar, options.logger);
+    const rankImg = await loadRemoteImage(ctx, stats.rankImg, options.logger);
+    const metricsStartY = drawHeaderSection(c, stats, options, avatar, rankImg);
+    const primaryMetrics = buildPrimaryMetrics(stats);
+    const primaryBottom = drawPrimaryMetricGrid(c, primaryMetrics, {
+        startX: 40,
+        startY: metricsStartY,
+        width,
+        accent: options.accentColor,
+    });
+    const secondaryMetrics = buildSecondaryMetrics(stats);
+    const secondaryBottom = drawSecondaryMetricGrid(c, secondaryMetrics, {
+        startX: 40,
+        startY: primaryBottom + 24,
+        width,
+        accent: options.accentColor,
+    });
+    await drawWeaponsSection(ctx, c, stats.weapons, {
+        startX: 40,
+        startY: secondaryBottom + 32,
+        width,
+        accent: options.accentColor,
+        logger: options.logger,
+    });
+    drawFooter(c, width, height);
+    return canvas.toBuffer('image/png');
+}
+function drawCardBackground(c, width, height, accentColor) {
+    const baseGradient = c.createLinearGradient(0, 0, 0, height);
+    baseGradient.addColorStop(0, '#050b16');
+    baseGradient.addColorStop(1, '#00040a');
+    c.fillStyle = baseGradient;
     c.fillRect(0, 0, width, height);
-    c.fillStyle = hexToRgba(options.accentColor, 0.25);
+    c.save();
+    c.fillStyle = hexToRgba('#0f172a', 0.88);
+    roundRect(c, 24, 24, width - 48, height - 48, 28);
+    c.fill();
+    const accentGradient = c.createLinearGradient(width * 0.4, 0, width, 0);
+    accentGradient.addColorStop(0, hexToRgba(accentColor, 0.18));
+    accentGradient.addColorStop(1, hexToRgba(accentColor, 0.04));
+    c.fillStyle = accentGradient;
+    roundRect(c, 24, 24, width - 48, height - 48, 28);
+    c.fill();
+    c.fillStyle = hexToRgba(accentColor, 0.22);
     c.beginPath();
-    c.moveTo(width, 0);
-    c.lineTo(width, height * 0.6);
-    c.lineTo(width * 0.55, height * 0.3);
+    c.moveTo(width * 0.65, 24);
+    c.lineTo(width - 24, 24);
+    c.lineTo(width - 24, height * 0.5);
     c.closePath();
     c.fill();
-    const avatarSize = 140;
-    const avatar = await loadRemoteImage(ctx, stats.avatar, options.logger);
+    c.strokeStyle = hexToRgba('#1f2937', 0.45);
+    c.lineWidth = 1;
+    for (let i = 0; i <= 5; i++) {
+        const x = 48 + i * ((width - 96) / 5);
+        c.beginPath();
+        c.moveTo(x, 24);
+        c.lineTo(x - 40, height - 24);
+        c.stroke();
+    }
+    c.restore();
+}
+function drawHeaderSection(c, stats, options, avatar, rankImg) {
+    const paddingX = 56;
+    let baselineY = 96;
+    // Title badge
+    c.save();
+    c.fillStyle = hexToRgba(options.accentColor, 0.92);
+    roundRect(c, paddingX, baselineY - 64, 84, 34, 12);
+    c.fill();
+    c.fillStyle = '#0b1220';
+    c.font = 'bold 20px "Segoe UI", sans-serif';
+    c.fillText('BF 6', paddingX + 14, baselineY - 40);
+    c.restore();
+    const avatarSize = 132;
     if (avatar) {
-        drawRoundedImage(c, avatar, 40, 40, avatarSize, avatarSize, 28);
+        drawRoundedImage(c, avatar, paddingX, baselineY - avatarSize + 12, avatarSize, avatarSize, 28);
     }
-    c.fillStyle = '#e2e8f0';
-    c.font = 'bold 46px "Segoe UI", sans-serif';
-    const title = (stats.userName || stats.personaName || options.player).toUpperCase();
-    c.fillText(title, 40 + (avatar ? avatarSize + 24 : 0), 94);
-    c.font = '24px "Segoe UI", sans-serif';
+    const textX = avatar ? paddingX + avatarSize + 36 : paddingX;
+    const playerName = stats.userName || stats.personaName || options.player;
+    c.fillStyle = '#f8fafc';
+    c.font = 'bold 54px "Microsoft YaHei", "Segoe UI", sans-serif';
+    c.fillText(playerName, textX, baselineY + 4);
     c.fillStyle = '#94a3b8';
-    const subtitle = `Platform: ${options.platform.toUpperCase()}  ·  Rank: ${formatRank(stats)}`;
-    c.fillText(subtitle, 40 + (avatar ? avatarSize + 24 : 0), 136);
-    const rankImg = await loadRemoteImage(ctx, stats.rankImg, options.logger);
+    c.font = '24px "Segoe UI", sans-serif';
+    const rankTitle = formatRank(stats);
+    const hoursPlayed = formatPlaytime(stats.secondsPlayed);
+    const subtitle = `${rankTitle} ｜ 战斗时间: ${hoursPlayed}`;
+    c.fillText(subtitle, textX, baselineY + 52);
+    const platformTag = `平台: ${options.platform.toUpperCase()}`;
+    c.fillStyle = '#cbd5f5';
+    c.font = '22px "Segoe UI", sans-serif';
+    c.fillText(platformTag, textX, baselineY + 88);
     if (rankImg) {
-        const rankSize = 120;
-        c.drawImage(rankImg, width - rankSize - 40, 40, rankSize, rankSize);
+        const rankSize = 118;
+        const rankX = options.width - rankSize - 72;
+        const rankY = baselineY - rankSize + 24;
+        drawRoundedImage(c, rankImg, rankX, rankY, rankSize, rankSize, 20);
     }
-    const metrics = buildMetrics(stats);
-    const gridLeft = 40;
-    const gridTop = 190;
-    const gridColWidth = (width - gridLeft * 2) / 3;
-    const gridRowHeight = 86;
+    else {
+        c.fillStyle = hexToRgba(options.accentColor, 0.45);
+        const rankX = options.width - 196;
+        const rankY = baselineY - 78;
+        roundRect(c, rankX, rankY, 152, 76, 18);
+        c.fill();
+        c.fillStyle = '#f1f5f9';
+        c.font = 'bold 26px "Segoe UI", sans-serif';
+        c.fillText(rankTitle, rankX + 28, rankY + 46);
+    }
+    c.strokeStyle = hexToRgba('#1e293b', 0.6);
+    c.lineWidth = 1.2;
+    c.beginPath();
+    c.moveTo(paddingX, baselineY + 112);
+    c.lineTo(options.width - paddingX, baselineY + 112);
+    c.stroke();
+    return baselineY + 132;
+}
+function buildPrimaryMetrics(stats) {
+    var _a;
+    return [
+        {
+            label: 'SPM',
+            value: formatNumber(stats.scorePerMinute, 0),
+            caption: '得分 / 分钟',
+            highlight: true,
+        },
+        {
+            label: 'K/D',
+            value: formatNumber(stats.killDeath, 2),
+            caption: `${formatPlainNumber(stats.kills)} 击杀 · ${formatPlainNumber(stats.deaths)} 死亡`,
+        },
+        {
+            label: 'KPM',
+            value: formatNumber(stats.killsPerMinute, 2),
+            caption: '击杀 / 分钟',
+        },
+        {
+            label: '胜率',
+            value: stats.winPercent || calcWinRate(stats.wins, stats.loses),
+            caption: `${formatPlainNumber(stats.wins)} 胜 · ${formatPlainNumber(stats.loses)} 负`,
+        },
+        {
+            label: '对局',
+            value: formatInteger(stats.matchesPlayed),
+            caption: '已完成的比赛',
+        },
+        {
+            label: '伤害',
+            value: formatAbbreviated((_a = stats.damage) !== null && _a !== void 0 ? _a : stats.damageDealt),
+            caption: '总伤害输出',
+        },
+    ];
+}
+function buildSecondaryMetrics(stats) {
+    var _a;
+    return [
+        {
+            label: '最佳兵种',
+            value: stats.bestClassName || stats.bestClass || '未知',
+            caption: '偏好职业',
+            highlight: true,
+        },
+        {
+            label: '命中率',
+            value: stats.accuracy || calcAccuracy(stats.shotsHit, stats.shotsFired),
+            caption: `${formatPlainNumber(stats.shotsHit)} 命中 / ${formatPlainNumber(stats.shotsFired)} 射击`,
+        },
+        {
+            label: '爆头率',
+            value: stats.headshotsPercent || calcRate(stats.headshots, stats.kills),
+            caption: `${formatPlainNumber(stats.headshots)} 次爆头`,
+        },
+        {
+            label: '近战击杀',
+            value: formatInteger(stats.meleeKills),
+            caption: `最高连杀 ${formatPlainNumber(stats.highestKillStreak)}`,
+        },
+        {
+            label: '行程',
+            value: formatDistance((_a = stats.distanceTraveled) !== null && _a !== void 0 ? _a : stats.distanceTravelled),
+            caption: '战场位移',
+        },
+        {
+            label: '总时间',
+            value: formatDuration(stats.secondsPlayed),
+            caption: '累计在线',
+        },
+    ];
+}
+function drawPrimaryMetricGrid(c, metrics, layout) {
+    const columns = 6;
+    const contentWidth = layout.width - layout.startX * 2;
+    const columnWidth = contentWidth / columns;
+    const rowHeight = 122;
+    let bottom = layout.startY;
     metrics.forEach((metric, index) => {
-        const col = index % 3;
-        const row = Math.floor(index / 3);
-        const x = gridLeft + col * gridColWidth;
-        const y = gridTop + row * gridRowHeight;
-        drawMetricBlock(c, x, y, gridColWidth - 30, gridRowHeight - 22, metric, options.accentColor);
+        const col = index % columns;
+        const row = Math.floor(index / columns);
+        const x = layout.startX + col * columnWidth;
+        const y = layout.startY + row * rowHeight;
+        drawMetricPanel(c, x, y, columnWidth - 18, rowHeight - 16, metric, layout.accent, true);
+        bottom = Math.max(bottom, y + rowHeight);
     });
-    const topWeapon = pickTopWeapon(stats.weapons);
-    if (topWeapon) {
-        await drawWeaponBlock(ctx, c, topWeapon, {
-            x: 40,
-            y: height - 140,
-            width: width - 80,
-            height: 100,
-            accent: options.accentColor,
-            logger: options.logger,
-        });
+    return bottom;
+}
+function drawSecondaryMetricGrid(c, metrics, layout) {
+    const columns = 3;
+    const contentWidth = layout.width - layout.startX * 2;
+    const columnWidth = contentWidth / columns;
+    const rowHeight = 108;
+    let bottom = layout.startY;
+    metrics.forEach((metric, index) => {
+        const col = index % columns;
+        const row = Math.floor(index / columns);
+        const x = layout.startX + col * columnWidth;
+        const y = layout.startY + row * rowHeight;
+        drawMetricPanel(c, x, y, columnWidth - 20, rowHeight - 14, metric, layout.accent);
+        bottom = Math.max(bottom, y + rowHeight);
+    });
+    return bottom;
+}
+function drawMetricPanel(c, x, y, width, height, metric, accentColor, emphasize = false) {
+    c.save();
+    const radius = emphasize ? 20 : 18;
+    c.fillStyle = emphasize ? hexToRgba('#111c2d', 0.92) : hexToRgba('#0f172a', 0.88);
+    roundRect(c, x, y, width, height, radius);
+    c.fill();
+    if (metric.highlight) {
+        c.fillStyle = hexToRgba(accentColor, 0.3);
+        roundRect(c, x, y, width, 8, radius, radius, 0, 0);
+        c.fill();
+    }
+    c.fillStyle = '#94a3b8';
+    c.font = '20px "Segoe UI", sans-serif';
+    c.fillText(metric.label, x + 20, y + 38);
+    c.fillStyle = '#f8fafc';
+    c.font = emphasize ? 'bold 44px "Segoe UI", sans-serif' : 'bold 34px "Segoe UI", sans-serif';
+    c.fillText(metric.value, x + 20, y + (emphasize ? 80 : 74));
+    if (metric.caption) {
+        c.fillStyle = '#cbd5f5';
+        c.font = '18px "Segoe UI", sans-serif';
+        c.fillText(metric.caption, x + 20, y + height - 18);
+    }
+    c.restore();
+}
+async function drawWeaponsSection(ctx, c, weapons, layout) {
+    const candidates = (weapons || []).slice().sort((a, b) => Number(b.kills || 0) - Number(a.kills || 0));
+    const topWeapons = candidates.slice(0, 3);
+    if (!topWeapons.length)
+        return;
+    const rowHeight = 128;
+    const contentWidth = layout.width - layout.startX * 2;
+    const blockWidth = contentWidth;
+    for (let index = 0; index < topWeapons.length; index++) {
+        const weapon = topWeapons[index];
+        const y = layout.startY + index * (rowHeight + 18);
+        c.save();
+        c.fillStyle = hexToRgba('#0f172a', 0.9);
+        roundRect(c, layout.startX, y, blockWidth, rowHeight, 22);
+        c.fill();
+        c.fillStyle = hexToRgba(layout.accent, 0.35);
+        roundRect(c, layout.startX, y, blockWidth, 8, 22, 22, 0, 0);
+        c.fill();
+        const padding = 26;
+        const previewSize = 108;
+        const weaponImg = await loadRemoteImage(ctx, weapon.image || weapon.altImage, layout.logger);
+        if (weaponImg) {
+            c.drawImage(weaponImg, layout.startX + padding, y + 10, previewSize, rowHeight - 20);
+        }
+        else {
+            c.fillStyle = hexToRgba('#1e293b', 0.6);
+            roundRect(c, layout.startX + padding, y + 16, previewSize, rowHeight - 32, 16);
+            c.fill();
+            c.fillStyle = '#64748b';
+            c.font = '16px "Segoe UI", sans-serif';
+            c.fillText('无武器预览', layout.startX + padding + 12, y + rowHeight / 2);
+        }
+        const textX = layout.startX + padding + previewSize + 36;
+        const weaponLevel = Number(weapon.level || weapon.type) || index + 1;
+        c.fillStyle = '#f1f5f9';
+        c.font = 'bold 30px "Segoe UI", sans-serif';
+        c.fillText(`${weapon.weaponName} Lv.${weaponLevel}`, textX, y + 48);
+        c.fillStyle = '#cbd5f5';
+        c.font = '20px "Segoe UI", sans-serif';
+        const infos = [
+            `击杀 ${formatPlainNumber(weapon.kills)}`,
+            `KPM ${formatNumber(weapon.killsPerMinute, 2)}`,
+            `命中率 ${weapon.accuracy || 'N/A'}`,
+        ];
+        c.fillText(infos.join(' · '), textX, y + 84);
+        c.restore();
     }
     c.fillStyle = '#64748b';
     c.font = '18px "Segoe UI", sans-serif';
-    c.fillText(`数据来源: api.gametools.network · 生成时间: ${new Date().toLocaleString()}`, 40, height - 24);
-    return canvas.toBuffer('image/png');
+    c.fillText('武器统计 (Top 3)', layout.startX, layout.startY - 18);
 }
-function buildMetrics(stats) {
-    return [
-        { label: '时间', value: formatDuration(stats.secondsPlayed) },
-        { label: '击杀', value: formatInteger(stats.kills) },
-        { label: '死亡', value: formatInteger(stats.deaths) },
-        { label: 'K/D', value: formatNumber(stats.killDeath, 2) },
-        { label: 'KPM', value: formatNumber(stats.killsPerMinute, 2) },
-        { label: '胜场', value: formatInteger(stats.wins) },
-        { label: '败场', value: formatInteger(stats.loses) },
-        { label: '胜率', value: stats.winPercent || calcWinRate(stats.wins, stats.loses) },
-        { label: '命中率', value: stats.accuracy || calcAccuracy(stats.shotsHit, stats.shotsFired) },
-    ];
-}
-function drawMetricBlock(c, x, y, width, height, metric, accentColor) {
+function drawFooter(c, width, height) {
     c.save();
-    c.fillStyle = hexToRgba('#1e293b', 0.85);
-    roundRect(c, x, y, width, height, 16);
-    c.fill();
-    c.fillStyle = hexToRgba(accentColor, 0.45);
-    roundRect(c, x, y, width, 6, 16, 16, 0, 0);
-    c.fill();
-    c.fillStyle = '#94a3b8';
-    c.font = '20px "Segoe UI", sans-serif';
-    c.fillText(metric.label, x + 18, y + height / 2 - 6);
-    c.fillStyle = '#f8fafc';
-    c.font = 'bold 30px "Segoe UI", sans-serif';
-    c.fillText(metric.value, x + 18, y + height / 2 + 30);
+    c.strokeStyle = hexToRgba('#1f2937', 0.6);
+    c.lineWidth = 1;
+    c.beginPath();
+    c.moveTo(48, height - 96);
+    c.lineTo(width - 48, height - 96);
+    c.stroke();
+    c.fillStyle = '#475569';
+    c.font = '18px "Segoe UI", sans-serif';
+    c.fillText('数据来源：api.gametools.network', 56, height - 58);
+    c.fillText(`生成时间：${new Date().toLocaleString('zh-CN')}`, 56, height - 26);
     c.restore();
 }
-function roundRect(ctx, x, y, width, height, radiusTopLeft = 10, radiusTopRight = 10, radiusBottomRight = 10, radiusBottomLeft = 10) {
+function roundRect(ctx, x, y, width, height, radiusTopLeft = 20, radiusTopRight = 20, radiusBottomRight = 20, radiusBottomLeft = 20) {
     ctx.beginPath();
     ctx.moveTo(x + radiusTopLeft, y);
     ctx.arcTo(x + width, y, x + width, y + height, radiusTopRight);
@@ -196,33 +419,6 @@ function roundRect(ctx, x, y, width, height, radiusTopLeft = 10, radiusTopRight 
     ctx.arcTo(x, y + height, x, y, radiusBottomLeft);
     ctx.arcTo(x, y, x + width, y, radiusTopLeft);
     ctx.closePath();
-}
-async function drawWeaponBlock(ctx, c, weapon, layout) {
-    c.save();
-    c.fillStyle = hexToRgba('#1e293b', 0.82);
-    roundRect(c, layout.x, layout.y, layout.width, layout.height, 18);
-    c.fill();
-    c.fillStyle = hexToRgba(layout.accent, 0.35);
-    roundRect(c, layout.x, layout.y, layout.width, 6, 18, 18, 0, 0);
-    c.fill();
-    const padding = 24;
-    const textX = layout.x + padding + 96;
-    const weaponImg = await loadRemoteImage(ctx, weapon.image || weapon.altImage, layout.logger);
-    if (weaponImg) {
-        c.drawImage(weaponImg, layout.x + padding, layout.y + 10, 96, layout.height - 20);
-    }
-    c.fillStyle = '#f1f5f9';
-    c.font = 'bold 28px "Segoe UI", sans-serif';
-    c.fillText(`主武器：${weapon.weaponName}`, textX, layout.y + 46);
-    c.fillStyle = '#cbd5f5';
-    c.font = '20px "Segoe UI", sans-serif';
-    const statsLine = `击杀 ${formatInteger(weapon.kills)} · 击杀/分钟 ${formatNumber(weapon.killsPerMinute, 2)} · 命中率 ${weapon.accuracy || 'N/A'}`;
-    c.fillText(statsLine, textX, layout.y + 82);
-    c.restore();
-}
-function pickTopWeapon(weapons = []) {
-    const sorted = weapons.filter((w) => Number(w.kills) > 0).sort((a, b) => Number(b.kills) - Number(a.kills));
-    return sorted.length ? sorted[0] : weapons[0];
 }
 function formatRank(stats) {
     if (stats.rankName)
@@ -240,6 +436,55 @@ function formatNumber(value, fractionDigits = 2) {
     if (!Number.isFinite(num))
         return '0';
     return num.toFixed(fractionDigits);
+}
+function formatPlainNumber(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num))
+        return '0';
+    return `${Math.round(num)}`;
+}
+function formatAbbreviated(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num === 0)
+        return '0';
+    if (Math.abs(num) >= 1000000) {
+        return `${(num / 1000000).toFixed(1)}M`;
+    }
+    if (Math.abs(num) >= 1000) {
+        return `${(num / 1000).toFixed(1)}K`;
+    }
+    return num.toString();
+}
+function calcRate(part, total) {
+    const partNum = Number(part) || 0;
+    const totalNum = Number(total) || 0;
+    if (!totalNum)
+        return '0%';
+    return `${((partNum / totalNum) * 100).toFixed(1)}%`;
+}
+function formatDistance(value) {
+    const meters = Number(value);
+    if (!Number.isFinite(meters) || meters <= 0)
+        return '0m';
+    if (meters >= 1000) {
+        const km = meters / 1000;
+        if (km >= 1000)
+            return `${(km / 1000).toFixed(1)}k KM`;
+        return `${km.toFixed(1)} KM`;
+    }
+    return `${Math.round(meters)} m`;
+}
+function formatPlaytime(seconds) {
+    const total = Number(seconds) || 0;
+    if (total <= 0)
+        return '0小时';
+    const hours = total / 3600;
+    if (hours >= 24) {
+        const days = Math.floor(hours / 24);
+        const remainHours = Math.round(hours % 24);
+        return `${days}天${remainHours ? `${remainHours}小时` : ''}`;
+    }
+    return `${hours.toFixed(0)}小时`;
 }
 function calcWinRate(wins, losses) {
     const win = Number(wins) || 0;

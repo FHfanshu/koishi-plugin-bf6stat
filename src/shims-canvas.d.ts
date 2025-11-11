@@ -7,14 +7,18 @@ declare module '@napi-rs/canvas' {
 
   export interface CanvasRenderingContext2D {
     fillStyle: string | CanvasGradient
+    strokeStyle: string | CanvasGradient
     font: string
+    lineWidth: number
     fillRect(x: number, y: number, width: number, height: number): void
     beginPath(): void
     moveTo(x: number, y: number): void
     lineTo(x: number, y: number): void
     closePath(): void
     fill(): void
+    stroke(): void
     createLinearGradient(x0: number, y0: number, x1: number, y1: number): CanvasGradient
+    createRadialGradient(x0: number, y0: number, r0: number, x1: number, y1: number, r1: number): CanvasGradient
     save(): void
     restore(): void
     drawImage(image: Image, dx: number, dy: number, dWidth: number, dHeight: number): void

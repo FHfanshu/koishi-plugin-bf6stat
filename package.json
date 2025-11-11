@@ -1,7 +1,7 @@
 {
-  "name": "koishi-plugin-bf6-stats",
-  "version": "0.1.0",
-  "description": "Koishi 插件：查询 Battlefield 6 玩家战绩并返回战绩卡片图片",
+  "name": "koishi-plugin-bf6-player-stats",
+  "version": "0.0.2778",
+  "description": "自用，查询 Battlefield 6 玩家战绩并返回战绩卡片图片",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "commonjs",
@@ -19,12 +19,22 @@
   ],
   "author": "",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FHfanshu/koishi-plugin-bf6-stats.git"
+  },
+  "bugs": {
+    "url": "https://github.com/FHfanshu/koishi-plugin-bf6-stats/issues"
+  },
+  "homepage": "https://github.com/FHfanshu/koishi-plugin-bf6-stats#readme",
   "files": [
     "dist"
   ],
   "dependencies": {
     "@napi-rs/canvas": "^0.1.43",
-    "dayjs": "^1.11.11",
+    "dayjs": "^1.11.11"
+  },
+  "peerDependencies": {
     "koishi": "^4.15.8"
   },
   "devDependencies": {

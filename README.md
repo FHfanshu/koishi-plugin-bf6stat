@@ -25,8 +25,8 @@ npm run build
 | defaultPlatform | `pc` | 默认查询平台（pc / ps / xbox） |
 | language | `zh-CN` | 接口语言代码（传递给 Gametools API 的 `lang` 参数） |
 | accentColor | `#2563eb` | 战绩卡片强调色 |
-| cardWidth | `940` | 战绩卡片宽度 |
-| cardHeight | `520` | 战绩卡片高度 |
+| cardWidth | `1024` | 战绩卡片宽度 |
+| cardHeight | `640` | 战绩卡片高度 |
 
 ## 用法
 
