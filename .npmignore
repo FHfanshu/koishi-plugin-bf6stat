@@ -28,6 +28,7 @@ node_modules/
 coverage/
 
 # IDE files
+.claude/
 .vscode/
 .idea/
 

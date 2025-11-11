@@ -19,6 +19,7 @@ lib/
 .env.production.local
 
 # IDE and editor files
+.claude/
 .vscode/
 .idea/
 *.swp
